@@ -7,8 +7,12 @@ const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const ObjectId = require("mongodb").ObjectId;
 const { MongoClient, ServerApiVersion } = require("mongodb");
+const path = require("path");
+const multer = require("multer");
+const cloudinary = require("./utilits/cloudinary");
+// const upload = require("./utilits/multer");
 
-const port = process.env.PORT || 5001;
+const port = process.env.PORT || 5000;
 
 // middleware
 app.use(cors());
@@ -21,19 +25,51 @@ const client = new MongoClient(uri, {
   serverApi: ServerApiVersion.v1,
 });
 
-//jwt authentication token
-const generateJWTToken = (user) => {
-  return jwt.sign(user, process.env.JWT_SECRET_KEY, { expiresIn: "500s" });
-};
+// file upload code start
+const UPLOADS_FOLDER = "./uploads/";
 
-const verifyJWTToken = (req, res, next) => {
-  try {
-    const { authorization } = req.headers;
-    const decoded = jwt.verify(authorization, process.env.JWT_SECRET_KEY);
-    req.decodedEmail = decoded.email;
-    next();
-  } catch {}
-};
+//define the storage
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, UPLOADS_FOLDER);
+  },
+  filename: (req, file, cb) => {
+    const fileExt = path.extname(file.originalname);
+    const fileName =
+      file.originalname
+        .replace(fileExt, "")
+        .toLocaleLowerCase()
+        .split(" ")
+        .join("-") +
+      "-" +
+      Date.now();
+    cb(null, fileName + fileExt);
+  },
+});
+
+// preapre the final multer upload object
+let upload = multer({
+  storage: storage,
+  limits: {
+    fileSize: 2000000, // 2mb
+  },
+  fileFilter: (req, file, cb) => {
+    if (file.fieldname === "avatar") {
+      if (
+        file.mimetype === "image/png" ||
+        file.mimetype === "image/jpg" ||
+        file.mimetype === "image/jpeg"
+      ) {
+        cb(null, true);
+      } else {
+        cb(new Error("Only .jpg, .png or .jpeg format allowed"));
+      }
+    } else {
+      cb(new Error("There was an unknown error"));
+    }
+  },
+});
+// file upload code end
 
 async function run() {
   try {
@@ -42,57 +78,39 @@ async function run() {
     const usersCollection = database.collection("users");
     const postCollection = database.collection("posts");
 
-    //register
-    app.post("/api/registration", async (req, res) => {
-      const hashedPass = await bcrypt.hash(req.body.password, 10);
-      const newUser = {
-        displayName: req.body.name,
-        password: hashedPass,
-        email: req.body.email,
-      };
-      const result = await usersCollection.insertOne(newUser);
+    app.post("/api/users", async (req, res) => {
+      const user = req.body;
+      const result = await usersCollection.insertOne(user);
       res.json(result);
     });
 
-    //login
-    app.post("/api/login", async (req, res) => {
-      const userInfo = req.body;
-      const newUser = {
-        email: userInfo.email,
-        password: "jwttoken",
-      };
-      const token = generateJWTToken(newUser);
-      const query = { email: userInfo.email };
-      const user = await usersCollection.findOne(query);
-
-      const matchedUser = {
-        displayName: user.displayName,
-        email: user.email,
-      };
-      console.log("match", matchedUser);
-
-      const passValidate = await bcrypt.compare(
-        userInfo.password,
-        user.password
-      );
-
-      if (passValidate) {
-        console.log("password is correct");
-        res.json({ token: token, status: "login", user: matchedUser });
-      } else {
-        console.log("password is incorrect");
-        res.json({ status: "notlogin" });
-      }
-    });
-
     // create post
-    app.post("/api/new-post", async (req, res) => {
-      const newPost = req.body;
-      const result = await postCollection.insertOne(newPost);
-      res.send(result);
-    });
+    app.post(
+      "/api/new-post",
+      upload.fields([{ name: "avatar", maxCount: 1 }]),
+      async (req, res) => {
+        try {
+          // Upload image to cloudinary
+          // const uploadResult = await cloudinary.uploader.upload(req.file.path);
 
-    // get all billings
+          const newPost = {
+            description: req.body.description,
+            // image: uploadResult.secure_url,
+            postDate: new Date(),
+            name: req.body.name,
+            // cloudinary_id: uploadResult.public_id,
+          };
+
+          const result = await postCollection.insertOne(newPost);
+          console.log(result);
+          res.send(result);
+        } catch (err) {
+          console.log(err);
+        }
+      }
+    );
+
+    // get all post
     app.get("/api/all-post", async (req, res) => {
       const query = {};
       const cursor = postCollection.find(query);
